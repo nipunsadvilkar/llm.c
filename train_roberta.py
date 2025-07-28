@@ -653,7 +653,8 @@ if __name__ == "__main__":
     text = "The capital of France is <mask>."
     inputs = tokenizer(text, return_tensors="pt")
 
-    model = RoBERTaForMaskedLM.from_pretrained("roberta-base")
+    # model = RoBERTaForMaskedLM.from_pretrained("roberta-base")
+    model = RoBERTaForMaskedLM(RoBERTaConfig())
     torch.manual_seed(42)
     model.eval()  # Set model to evaluation mode
     with torch.no_grad():
