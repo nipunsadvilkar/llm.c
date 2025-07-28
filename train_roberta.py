@@ -648,15 +648,23 @@ def estimate_loss(model, data, eval_iters=100, batch_size=4, block_size=128, dev
 
 if __name__ == "__main__":
     from transformers import RobertaTokenizer
+    if torch.backends.mps.is_available():
+        print("Using MPS backend")
+        device = torch.device("mps")
+    else:
+        print("Using CPU backend")
+        device = torch.device("cpu")
 
     tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
     text = "The capital of France is <mask>."
     inputs = tokenizer(text, return_tensors="pt")
+    inputs = inputs.to(device)
 
     # model = RoBERTaForMaskedLM.from_pretrained("roberta-base")
     model = RoBERTaForMaskedLM(RoBERTaConfig())
     torch.manual_seed(42)
     model.eval()  # Set model to evaluation mode
+    model.to(device)
     with torch.no_grad():
         logits = model(**inputs)
         logits = logits[1]
