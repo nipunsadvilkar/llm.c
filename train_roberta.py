@@ -655,83 +655,105 @@ if __name__ == "__main__":
         print("Using CPU backend")
         device = torch.device("cpu")
 
-    tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
-    text = "The capital of France is <mask>."
-    inputs = tokenizer(text, return_tensors="pt")
-    inputs = inputs.to(device)
+    # tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+    # text = "The capital of France is <mask>."
+    # inputs = tokenizer(text, return_tensors="pt")
+    # inputs = inputs.to(device)
 
-    # model = RoBERTaForMaskedLM.from_pretrained("roberta-base")
-    model = RoBERTaForMaskedLM(RoBERTaConfig())
-    torch.manual_seed(42)
-    model.eval()  # Set model to evaluation mode
+    # # model = RoBERTaForMaskedLM.from_pretrained("roberta-base")
+    # model = RoBERTaForMaskedLM(RoBERTaConfig())
+    # torch.manual_seed(42)
+    # model.eval()  # Set model to evaluation mode
+    # model.to(device)
+    # with torch.no_grad():
+    #     logits = model(**inputs)
+    #     logits = logits[1]
+    # print(logits.shape)
+
+    ###################################
+    # Predict masked token top k logits
+    ###################################
+    # mask_token_index = (inputs.input_ids == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0]
+    # predicted_token_id = logits[0, mask_token_index].argmax(axis=-1)
+    # predicted_token = tokenizer.decode(predicted_token_id)
+    # print(f"Predicted token: {predicted_token}")
+    # top_k = 10
+    # top_k_logits, top_k_indices = torch.topk(logits[0, mask_token_index], top_k)
+    # for i in range(top_k):
+    #     token_id = top_k_indices.view(-1)[i].item()
+    #     token = tokenizer.decode(token_id)
+    #     score = torch.softmax(top_k_logits.view(-1)[i], dim=0).item()
+    #     print(f"Token: {token}, Score: {score:.4f}")
+
+    ########################################################################
+
+    # Test basic model
+    print("="*50)
+    print("Testing RoBERTa Implementation")
+    print("="*50)
+    
+    config = RoBERTaConfig()
+    model = RoBERTaForMaskedLM(config)
     model.to(device)
-    with torch.no_grad():
-        logits = model(**inputs)
-        logits = logits[1]
-    print(logits.shape)
-    mask_token_index = (inputs.input_ids == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0]
-    predicted_token_id = logits[0, mask_token_index].argmax(axis=-1)
-    predicted_token = tokenizer.decode(predicted_token_id)
-    print(f"Predicted token: {predicted_token}")
-    top_k = 10
-    top_k_logits, top_k_indices = torch.topk(logits[0, mask_token_index], top_k)
-    for i in range(top_k):
-        token_id = top_k_indices.view(-1)[i].item()
-        token = tokenizer.decode(token_id)
-        score = torch.softmax(top_k_logits.view(-1)[i], dim=0).item()
-        print(f"Token: {token}, Score: {score:.4f}")
-    # # Test basic model
-    # print("="*50)
-    # print("Testing RoBERTa Implementation")
-    # print("="*50)
+    tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
     
-    # config = RoBERTaConfig()
-    # model = RoBERTaForMaskedLM(config)
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Model config: {config}")
+
+    torch.manual_seed(42)
+    # model.eval()  # Set model to evaluation mode
     
-    # print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    # print(f"Model config: {config}")
-    
-    # # Test forward pass
-    # batch_size = 2
-    # seq_length = 128
+    # Test forward pass
+    batch_size = 2
+    seq_length = 128
     # input_ids = torch.randint(3, config.vocab_size-1, (batch_size, seq_length))  # Avoid special tokens
-    # attention_mask = torch.ones(batch_size, seq_length)
+    with open('dev/data/tinyshakespeare/input.txt', 'r') as f:
+        data = f.read()
+    data = data[:1000]  # Use a small subset for testing
+    data = tokenizer.encode(data, return_tensors='pt').squeeze(0)  # Convert to tensor
+    buffer = data[:batch_size*seq_length]
+    input_ids = buffer.view(batch_size, seq_length)  # Reshape to (batch_size, seq_length)
+    attention_mask = (input_ids != tokenizer.pad_token_id).long()  # Create attention mask
+    # Test MLM preprocessing
+    print("\nTesting MLM preprocessing:")
+    tokenizer = SimpleTokenizer()
+    mlm_processor = MLMDataProcessor(tokenizer)
     
-    # # Test MLM preprocessing
-    # print("\nTesting MLM preprocessing:")
-    # tokenizer = SimpleTokenizer()
-    # mlm_processor = MLMDataProcessor(tokenizer)
+    input_ids_masked, labels = mlm_processor.mask_tokens(input_ids)
     
-    # input_ids_masked, labels = mlm_processor.mask_tokens(input_ids.clone())
+    print(f"Original tokens (first 20): {input_ids[0][:20].tolist()}")
+    print(f"Masked tokens (first 20):   {input_ids_masked[0][:20].tolist()}")
+    print(f"Labels (first 20):         {labels[0][:20].tolist()}")
     
-    # print(f"Original tokens (first 20): {input_ids[0][:20].tolist()}")
-    # print(f"Masked tokens (first 20):   {input_ids_masked[0][:20].tolist()}")
-    # print(f"Labels (first 20):         {labels[0][:20].tolist()}")
-    
-    # num_masked = (input_ids_masked == tokenizer.mask_token_id).sum().item()
-    # print(f"Number of masked tokens: {num_masked} ({num_masked/(batch_size*seq_length)*100:.1f}%)")
+    num_masked = (input_ids_masked == tokenizer.mask_token_id).sum().item()
+    print(f"Number of masked tokens: {num_masked} ({num_masked/(batch_size*seq_length)*100:.1f}%)")
     
     # # Test model forward pass with MLM
     # print("\nTesting model forward pass:")
     # with torch.no_grad():
+    #     input_ids_masked = input_ids_masked.to(device)
+    #     attention_mask = attention_mask.to(device)
+    #     labels = labels.to(device)
     #     loss, logits, _ = model(input_ids_masked, attention_mask=attention_mask, labels=labels)
     #     print(f"MLM Loss: {loss.item():.4f}")
     #     print(f"Logits shape: {logits.shape}")
     #     print(f"Expected shape: ({batch_size}, {seq_length}, {config.vocab_size})")
     
-    # # Test optimizer configuration
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    model.train()
+    for i in range(50):
+        optimizer.zero_grad()
+        input_ids_masked = input_ids_masked.to(device)
+        attention_mask = attention_mask.to(device)
+        labels = labels.to(device)
+        loss, logits, _ = model(input_ids_masked, attention_mask=attention_mask, labels=labels)
+        loss.backward()
+        optimizer.step()
+        print(f"Step {i}, Loss: {loss.item():.4f}")
+        # if i % 10 == 0:
+        #     print(f"Step {i}, Loss: {loss.item():.4f}")
+    # Test optimizer configuration
     # print("\nTesting optimizer configuration:")
     # optimizer = configure_optimizers(model, weight_decay=0.01, learning_rate=1e-4)
     # print(f"Optimizer: {optimizer}")
-    
-    # print("\n" + "="*50)
-    # print("RoBERTa implementation test completed successfully!")
-    # print("="*50)
-    
-    # # Next steps guide
-    # print("\nNext steps to complete the implementation:")
-    # print("1. Test against HuggingFace RoBERTa for parity")
-    # print("2. Add data loading for real datasets") 
-    # print("3. Implement training loop")
-    # print("4. Add model saving/loading compatible with llm.c format")
-    # print("5. Test with pretrained weights loading")
+
