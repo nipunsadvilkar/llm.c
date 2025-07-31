@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import torch
 import torch.nn as nn
@@ -652,9 +653,42 @@ def configure_optimizers(model, weight_decay, learning_rate, betas=(0.9, 0.999))
     print(
         f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
     )
+    fused = False
+    if hasattr(torch.optim, "FusedAdam") and torch.cuda.is_available():
+        fused = True
 
-    optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+    # optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+    optimizer = torch.optim.AdamW(
+        optim_groups, lr=learning_rate, betas=betas, eps=1e-6, fused=fused
+    )
     return optimizer
+
+
+def get_lr(step, warmup_steps=10000, lr_max=1e-4, lr_min=1e-5, total_steps=100000):
+    """
+    Linear warmup for warmup_steps steps to lr_max, then linear decay to lr_min by total_steps.
+
+    Args:
+        step (int): Current step
+        warmup_steps (int): Number of warmup steps
+        lr_max (float): Maximum learning rate
+        lr_min (float): Minimum learning rate (at end of training)
+        total_steps (int): Total number of training steps
+
+    Returns:
+        float: Learning rate for the current step
+    """
+    # Linear warmup phase
+    if step < warmup_steps:
+        return lr_max * step / warmup_steps
+
+    # Linear decay phase
+    if step < total_steps:
+        decay_ratio = (step - warmup_steps) / (total_steps - warmup_steps)
+        return lr_max - (lr_max - lr_min) * decay_ratio
+
+    # After total_steps, return minimum learning rate
+    return lr_min
 
 
 class DataLoaderLite:
@@ -741,10 +775,10 @@ if __name__ == "__main__":
 
     if torch.backends.mps.is_available():
         print("Using MPS backend")
-        device = torch.device("mps")
+        device = "mps"
     else:
         print("Using CPU backend")
-        device = torch.device("cpu")
+        device = "cpu"
 
     # tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
     # text = "The capital of France is <mask>."
@@ -783,9 +817,10 @@ if __name__ == "__main__":
     print("Testing RoBERTa Implementation")
     print("=" * 50)
 
-    config = RoBERTaConfig()
+    config = RoBERTaConfig(vocab_size=50304)
     model = RoBERTaForMaskedLM(config)
     model.to(device)
+    # model = torch.compile(model)  # Compile for performance
     tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -795,9 +830,10 @@ if __name__ == "__main__":
     # model.eval()  # Set model to evaluation mode
 
     # Test forward pass
-    batch_size = 2
-    seq_length = 128
+    batch_size = 8
+    seq_length = 512
     train_dataloader = DataLoaderLite(batch_size, seq_length, config)
+    torch.set_float32_matmul_precision("high")
     # input_ids, labels, attention_mask = train_dataloader.next_batch()
     # print(f"Masked tokens (first 20):   {input_ids[0][:20].tolist()}")
     # print(f"Labels (first 20):         {labels[0][:20].tolist()}")
@@ -807,19 +843,41 @@ if __name__ == "__main__":
     #     f"Number of masked tokens: {num_masked} ({num_masked/(batch_size*seq_length)*100:.1f}%)"
     # )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    # Training hyperparameters
+    warmup_steps = 10000
+    lr_max = 1e-4
+    lr_min = 1e-5
+    total_steps = 100000
+    max_steps = 100000
+
+    # Setup optimizer with initial learning rate (will be updated by scheduler)
+    optimizer = configure_optimizers(model, weight_decay=0.01, learning_rate=lr_max)
     model.train()
+
     for i in range(50):
+        # Update learning rate based on current step
+        lr = get_lr(i, warmup_steps, lr_max, lr_min, total_steps)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr
+
+        t0 = time.time()
         optimizer.zero_grad()
         input_ids_masked, labels, attention_mask = train_dataloader.next_batch()
         input_ids_masked = input_ids_masked.to(device)
         attention_mask = attention_mask.to(device)
         labels = labels.to(device)
+        # with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        # Forward pass
         loss, logits, _ = model(
             input_ids_masked, attention_mask=attention_mask, labels=labels
         )
         loss.backward()
         optimizer.step()
-        print(f"Step {i}, Loss: {loss.item():.4f}")
+        t1 = time.time()
+        dt = (t1 - t0) * 1000
+        tokens_per_sec = (train_dataloader.B * train_dataloader.T) / (t1 - t0)
+        print(
+            f"Step {i} | Loss: {loss.item():.4f} | lr: {lr:.4e} |  dt: {dt:.2f} ms | tok/s: {tokens_per_sec:.2f}"
+        )
         # if i % 10 == 0:
         #     print(f"Step {i}, Loss: {loss.item():.4f}")
