@@ -1,10 +1,13 @@
 import time
+from dataclasses import dataclass
+from typing import Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass
-from typing import Optional, Tuple
+
+from tqdm import tqdm
 
 import ssl
 
@@ -692,6 +695,56 @@ def get_lr(step, warmup_steps=10000, lr_max=1e-4, lr_min=1e-5, total_steps=10000
     return lr_min
 
 
+def tokenize_file(input_file, tokenizer, max_length=512):
+    """
+    Tokenize a text file for RoBERTa.
+
+    Unlike GPT which just concatenates everything, RoBERTa:
+    1. Splits into documents (separated by empty lines)
+    2. Adds <s> and </s> tokens
+    3. Packs documents together with padding if needed
+    """
+    all_tokens = []
+    current_doc = []
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        for line in tqdm(f, desc="Tokenizing"):
+            line = line.strip()
+
+            if not line:  # Empty line = document boundary
+                if current_doc:
+                    # Add special tokens
+                    doc_tokens = (
+                        [tokenizer.bos_token_id]
+                        + current_doc
+                        + [tokenizer.eos_token_id]
+                    )
+
+                    # Split into chunks if too long
+                    while len(doc_tokens) > max_length:
+                        chunk = doc_tokens[: max_length - 1] + [tokenizer.eos_token_id]
+                        all_tokens.extend(chunk)
+                        doc_tokens = [tokenizer.bos_token_id] + doc_tokens[
+                            max_length - 1 :
+                        ]
+
+                    if doc_tokens:
+                        all_tokens.extend(doc_tokens)
+
+                    current_doc = []
+            else:
+                # Tokenize line and add to current document
+                tokens = tokenizer.encode(line, add_special_tokens=False)
+                current_doc.extend(tokens)
+
+    # Don't forget last document
+    if current_doc:
+        doc_tokens = [tokenizer.bos_token_id] + current_doc + [tokenizer.eos_token_id]
+        all_tokens.extend(doc_tokens)
+
+    return all_tokens
+
+
 class DataLoaderLite:
     def __init__(self, B, T, config: RoBERTaConfig) -> None:
         self.B = B
@@ -699,10 +752,9 @@ class DataLoaderLite:
         self.config = config
         self.mask_token_id = 50264  # <mask>
         self.mlm_probability = 0.15
-        with open("dev/data/tinyshakespeare/input.txt", "r") as f:
-            data = f.read()
         tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
-        self.tokens = tokenizer.encode(data, return_tensors="pt").squeeze(0)
+        self.tokens = tokenize_file("dev/data/tinyshakespeare/input.txt", tokenizer)
+        self.tokens = torch.tensor(self.tokens, dtype=torch.long)
         print("Loaded data with length:", len(self.tokens))
         print("1 epoch is", len(self.tokens) // (B * T), "batches")
 
