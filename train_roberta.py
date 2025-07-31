@@ -6,8 +6,9 @@ import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-# import ssl
-# ssl._create_default_https_context = ssl._create_unverified_context
+import ssl
+
+ssl._create_default_https_context = ssl._create_unverified_context
 
 
 @dataclass
@@ -830,8 +831,14 @@ if __name__ == "__main__":
     # model.eval()  # Set model to evaluation mode
 
     # Test forward pass
-    batch_size = 8
+    batch_size = 16
     seq_length = 512
+    # Token Batch size 32K tested by Notably You et al. (2019) train BERT
+    total_batch_size = 32768  # 32K tokens
+    grad_accumulation_steps = total_batch_size // (batch_size * seq_length)
+    print(f"Total batch size -> {total_batch_size}")
+    print(f"Grad accumulation steps -> {grad_accumulation_steps}")
+
     train_dataloader = DataLoaderLite(batch_size, seq_length, config)
     torch.set_float32_matmul_precision("high")
     # input_ids, labels, attention_mask = train_dataloader.next_batch()
@@ -861,23 +868,30 @@ if __name__ == "__main__":
             param_group["lr"] = lr
 
         t0 = time.time()
+        loss_accum = 0.0
         optimizer.zero_grad()
-        input_ids_masked, labels, attention_mask = train_dataloader.next_batch()
-        input_ids_masked = input_ids_masked.to(device)
-        attention_mask = attention_mask.to(device)
-        labels = labels.to(device)
-        # with torch.autocast(device_type=device, dtype=torch.bfloat16):
-        # Forward pass
-        loss, logits, _ = model(
-            input_ids_masked, attention_mask=attention_mask, labels=labels
-        )
-        loss.backward()
+        for _ in range(grad_accumulation_steps):
+            # Get next batch
+            input_ids_masked, labels, attention_mask = train_dataloader.next_batch()
+            input_ids_masked = input_ids_masked.to(device)
+            attention_mask = attention_mask.to(device)
+            labels = labels.to(device)
+            # with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            # Forward pass
+            loss, logits, _ = model(
+                input_ids_masked, attention_mask=attention_mask, labels=labels
+            )
+            loss = loss / grad_accumulation_steps  # Scale loss for accumulation
+            loss_accum += loss.detach().cpu().item()
+            loss.backward()
         optimizer.step()
         t1 = time.time()
-        dt = (t1 - t0) * 1000
-        tokens_per_sec = (train_dataloader.B * train_dataloader.T) / (t1 - t0)
+        dt = t1 - t0
+        tokens_per_sec = (
+            train_dataloader.B * train_dataloader.T * grad_accumulation_steps
+        ) / dt
         print(
-            f"Step {i} | Loss: {loss.item():.4f} | lr: {lr:.4e} |  dt: {dt:.2f} ms | tok/s: {tokens_per_sec:.2f}"
+            f"Step {i} | Loss: {loss_accum:.6f} | lr: {lr:.4e} |  dt: {dt:.2f} ms | tok/s: {tokens_per_sec:.2f}"
         )
         # if i % 10 == 0:
         #     print(f"Step {i}, Loss: {loss.item():.4f}")
