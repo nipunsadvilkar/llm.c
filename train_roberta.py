@@ -893,11 +893,11 @@ if __name__ == "__main__":
 
     train_dataloader = DataLoaderLite(batch_size, seq_length, config)
     torch.set_float32_matmul_precision("high")
-    # input_ids, labels, attention_mask = train_dataloader.next_batch()
-    # print(f"Masked tokens (first 20):   {input_ids[0][:20].tolist()}")
+    # input_ids_masked, labels, attention_mask = train_dataloader.next_batch()
+    # print(f"Masked tokens (first 20):   {input_ids_masked[0][:20].tolist()}")
     # print(f"Labels (first 20):         {labels[0][:20].tolist()}")
 
-    # num_masked = (input_ids == tokenizer.mask_token_id).sum().item()
+    # num_masked = (input_ids_masked == tokenizer.mask_token_id).sum().item()
     # print(
     #     f"Number of masked tokens: {num_masked} ({num_masked/(batch_size*seq_length)*100:.1f}%)"
     # )
@@ -910,12 +910,14 @@ if __name__ == "__main__":
     max_steps = 100000
 
     # Setup optimizer with initial learning rate (will be updated by scheduler)
-    optimizer = configure_optimizers(model, weight_decay=0.01, learning_rate=lr_max)
+    lr = 3e-4
+    # optimizer = configure_optimizers(model, weight_decay=0.01, learning_rate=3e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     model.train()
 
     for i in range(50):
         # Update learning rate based on current step
-        lr = get_lr(i, warmup_steps, lr_max, lr_min, total_steps)
+        # lr = get_lr(i, warmup_steps, lr_max, lr_min, total_steps)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
