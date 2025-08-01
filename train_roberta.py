@@ -1,3 +1,4 @@
+import math
 import time
 from dataclasses import dataclass
 from typing import Tuple
@@ -668,31 +669,27 @@ def configure_optimizers(model, weight_decay, learning_rate, betas=(0.9, 0.999))
     return optimizer
 
 
-def get_lr(step, warmup_steps=10000, lr_max=1e-4, lr_min=1e-5, total_steps=100000):
-    """
-    Linear warmup for warmup_steps steps to lr_max, then linear decay to lr_min by total_steps.
-
-    Args:
-        step (int): Current step
-        warmup_steps (int): Number of warmup steps
-        lr_max (float): Maximum learning rate
-        lr_min (float): Minimum learning rate (at end of training)
-        total_steps (int): Total number of training steps
-
-    Returns:
-        float: Learning rate for the current step
-    """
-    # Linear warmup phase
-    if step < warmup_steps:
-        return lr_max * step / warmup_steps
-
-    # Linear decay phase
-    if step < total_steps:
-        decay_ratio = (step - warmup_steps) / (total_steps - warmup_steps)
-        return lr_max - (lr_max - lr_min) * decay_ratio
-
-    # After total_steps, return minimum learning rate
-    return lr_min
+def get_lr(
+    it,
+    learning_rate=1e-4,
+    learning_rate_decay_frac=1.0,
+    warmup_iters=0,
+    num_iterations=10,
+):
+    min_lr = learning_rate * learning_rate_decay_frac
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_iters:
+        return learning_rate * (it + 1) / warmup_iters
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > num_iterations:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_iters) / (num_iterations - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (
+        1.0 + math.cos(math.pi * decay_ratio)
+    )  # coeff starts at 1 and goes to 0
+    return min_lr + coeff * (learning_rate - min_lr)
 
 
 def tokenize_file(input_file, tokenizer, max_length=512):
@@ -910,14 +907,12 @@ if __name__ == "__main__":
     max_steps = 100000
 
     # Setup optimizer with initial learning rate (will be updated by scheduler)
-    lr = 3e-4
-    # optimizer = configure_optimizers(model, weight_decay=0.01, learning_rate=3e-4)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    optimizer = configure_optimizers(model, weight_decay=0.01, learning_rate=3e-4)
     model.train()
 
     for i in range(50):
         # Update learning rate based on current step
-        # lr = get_lr(i, warmup_steps, lr_max, lr_min, total_steps)
+        lr = get_lr(i)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
